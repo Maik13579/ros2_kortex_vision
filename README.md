@@ -1,4 +1,4 @@
-# Kinova Vision module package
+# KINOVA KORTEX™ Vision module package
 
 ## Overview
 This ROS 2 package provides helper methods and launch scripts to access the Kinova Vision module depth and color streams.
