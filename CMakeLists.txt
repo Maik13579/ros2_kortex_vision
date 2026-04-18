@@ -46,11 +46,20 @@ pkg_check_modules(GSTREAMER REQUIRED
 include_directories(include)
 include_directories(${GSTREAMER_INCLUDE_DIRS})
 
-add_library(${PROJECT_NAME} SHARED src/vision.cpp)
+add_library(${PROJECT_NAME} SHARED
+  src/vision.cpp
+  src/vision_component.cpp
+  src/vision_monitor_component.cpp
+)
 ament_target_dependencies(${PROJECT_NAME}
   ${THIS_PACKAGE_INCLUDE_DEPENDS})
 target_link_libraries(${PROJECT_NAME}
   "${GSTREAMER_LIBRARIES}")
+
+rclcpp_components_register_nodes(${PROJECT_NAME}
+  "ros_kortex_vision::VisionComponent"
+  "ros_kortex_vision::VisionMonitorComponent"
+)
 
 add_executable(${PROJECT_NAME}_node src/vision_node.cpp)
 ament_target_dependencies(${PROJECT_NAME}_node
@@ -73,6 +82,10 @@ install(TARGETS ${PROJECT_NAME}_node
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 # Include additional settings if needed

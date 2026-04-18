@@ -22,6 +22,9 @@
   <depend>sensor_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <depend>depth_image_proc</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
