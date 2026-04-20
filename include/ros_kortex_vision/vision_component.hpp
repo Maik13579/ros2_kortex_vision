@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 
 #include <rclcpp/rclcpp.hpp>
+
+#include <string>
 
 #include <camera_info_manager/camera_info_manager.hpp>
 
@@ -67,6 +70,9 @@ private:
   bool use_gst_timestamps_;
   bool is_first_initialize_;
   bool debug_;
+  std::string qos_reliability_;
+  std::size_t qos_history_depth_;
+  std::uint64_t published_frame_count_;
 
   // Maximum publication rate variables
   double max_pub_rate_hz_;

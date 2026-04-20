@@ -86,6 +86,16 @@ configurable_parameters = [
         "default": "true",
         "description": "Use intra process communication inside the component container",
     },
+    {
+        "name": "qos_reliability",
+        "default": "reliable",
+        "description": "QoS reliability for image topics: reliable or best_effort",
+    },
+    {
+        "name": "qos_history_depth",
+        "default": "10",
+        "description": "QoS history depth for image topics",
+    },
 ]
 
 
@@ -102,6 +112,8 @@ def declare_configurable_parameters():
 
 def launch_setup(context, *args, **kwargs):
     use_intra_process = LaunchConfiguration("use_intra_process_comms")
+    qos_reliability = LaunchConfiguration("qos_reliability")
+    qos_history_depth = LaunchConfiguration("qos_history_depth")
     launch_depth = LaunchConfiguration("launch_depth").perform(context).lower() == "true"
     launch_color = LaunchConfiguration("launch_color").perform(context).lower() == "true"
     depth_registration = LaunchConfiguration("depth_registration").perform(context).lower() == "true"
@@ -130,6 +142,8 @@ def launch_setup(context, *args, **kwargs):
                         "frame_id": LaunchConfiguration("depth_frame_id").perform(context),
                         "max_pub_rate": LaunchConfiguration("max_depth_pub_rate"),
                         "debug": False,
+                        "qos_reliability": qos_reliability,
+                        "qos_history_depth": qos_history_depth,
                     }
                 ],
                 remappings=[
@@ -163,6 +177,8 @@ def launch_setup(context, *args, **kwargs):
                         "frame_id": LaunchConfiguration("color_frame_id").perform(context),
                         "max_pub_rate": LaunchConfiguration("max_color_pub_rate"),
                         "debug": False,
+                        "qos_reliability": qos_reliability,
+                        "qos_history_depth": qos_history_depth,
                     }
                 ],
                 remappings=[

@@ -3,6 +3,8 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <cctype>
+#include <stdexcept>
 
 #include <rclcpp_components/register_node_macro.hpp>
 
@@ -29,6 +31,26 @@ const std::string CAMERA_INFO_URL_USER_PARAM = "camera_info_url_user";
 const std::string CAMERA_INFO_URL_DEFAULT_PARAM = "camera_info_url_default";
 const std::string MAX_PUB_RATE_PARAM = "max_pub_rate";
 const std::string DEBUG_PARAM = "debug";
+const std::string QOS_RELIABILITY_PARAM = "qos_reliability";
+const std::string QOS_HISTORY_DEPTH_PARAM = "qos_history_depth";
+
+rclcpp::ReliabilityPolicy parseReliability(const std::string& reliability)
+{
+  std::string value = reliability;
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+  if (value == "reliable")
+  {
+    return rclcpp::ReliabilityPolicy::Reliable;
+  }
+
+  if (value == "best_effort")
+  {
+    return rclcpp::ReliabilityPolicy::BestEffort;
+  }
+
+  throw std::invalid_argument("Unsupported qos_reliability value: " + reliability);
+}
 }  // namespace
 
 namespace CameraTypes
@@ -46,8 +68,6 @@ namespace ros_kortex_vision
 VisionComponent::VisionComponent(const rclcpp::NodeOptions& options)
   : rclcpp::Node(NODE_NAME, options)
   , camera_info_manager_{ std::make_shared<camera_info_manager::CameraInfoManager>(this) }
-  , image_publisher_{ create_publisher<sensor_msgs::msg::Image>("image_raw", rclcpp::SensorDataQoS()) }
-  , camera_info_publisher_{ create_publisher<sensor_msgs::msg::CameraInfo>("camera_info", rclcpp::SensorDataQoS()) }
   , is_started_(false)
   , stop_requested_(false)
   , quit_requested_(false)
@@ -63,6 +83,9 @@ VisionComponent::VisionComponent(const rclcpp::NodeOptions& options)
   , use_gst_timestamps_(false)
   , is_first_initialize_(true)
   , debug_(false)
+  , qos_reliability_("reliable")
+  , qos_history_depth_(10)
+  , published_frame_count_(0)
   , max_pub_rate_hz_(30.0)
   , timer_period_(std::chrono::milliseconds(33))
   , last_retry_time_(0, 0, RCL_ROS_TIME)
@@ -74,8 +97,19 @@ VisionComponent::VisionComponent(const rclcpp::NodeOptions& options)
     throw std::runtime_error("Failed to configure kinova vision component!");
   }
 
-  timer_period_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::duration<double>(1.0 / std::max(max_pub_rate_hz_, 1.0)));
+  const auto reliability = parseReliability(qos_reliability_);
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(qos_history_depth_));
+  qos.durability_volatile();
+  qos.reliability(reliability);
+
+  image_publisher_ = create_publisher<sensor_msgs::msg::Image>("image_raw", qos);
+  camera_info_publisher_ = create_publisher<sensor_msgs::msg::CameraInfo>("camera_info", qos);
+
+  RCLCPP_INFO(get_logger(), "[%s]: Using QoS reliability='%s' depth=%zu", camera_name_.c_str(), qos_reliability_.c_str(),
+              qos_history_depth_);
+
+  timer_period_ =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / std::max(max_pub_rate_hz_, 1.0)));
 
   timer_ = create_wall_timer(timer_period_, std::bind(&VisionComponent::onTimer, this));
 }
@@ -138,8 +172,7 @@ bool VisionComponent::configure()
   else
   {
     camera_name_ = "Camera";
-    RCLCPP_INFO(get_logger(), "%s param not found. Using default value: %s", CAMERA_NAME_PARAM.c_str(),
-                camera_name_.c_str());
+    RCLCPP_INFO(get_logger(), "%s param not found. Using default value: %s", CAMERA_NAME_PARAM.c_str(), camera_name_.c_str());
     camera_info_manager_->setCameraName(camera_name_);
   }
 
@@ -165,6 +198,22 @@ bool VisionComponent::configure()
 
   declare_parameter<bool>(DEBUG_PARAM, false);
   debug_ = get_parameter(DEBUG_PARAM).as_bool();
+
+  declare_parameter<std::string>(QOS_RELIABILITY_PARAM, qos_reliability_);
+  qos_reliability_ = get_parameter(QOS_RELIABILITY_PARAM).as_string();
+
+  declare_parameter<int>(QOS_HISTORY_DEPTH_PARAM, static_cast<int>(qos_history_depth_));
+  qos_history_depth_ = static_cast<std::size_t>(std::max<int64_t>(get_parameter(QOS_HISTORY_DEPTH_PARAM).as_int(), 1));
+
+  try
+  {
+    (void)parseReliability(qos_reliability_);
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_FATAL(get_logger(), "%s", e.what());
+    return false;
+  }
 
   return true;
 }
@@ -234,8 +283,8 @@ bool VisionComponent::initialize()
 
     if (!gst_element_link(outelement, gst_sink_))
     {
-      RCLCPP_FATAL(get_logger(), "[%s]: gstreamer: cannot link outelement(\"%s\") -> sink\n",
-                   camera_name_.c_str(), gst_element_get_name(outelement));
+      RCLCPP_FATAL(get_logger(), "[%s]: gstreamer: cannot link outelement(\"%s\") -> sink\n", camera_name_.c_str(),
+                   gst_element_get_name(outelement));
       gst_object_unref(outelement);
       gst_object_unref(gst_pipeline_);
       gst_pipeline_ = NULL;
@@ -276,8 +325,7 @@ bool VisionComponent::initialize()
 
   if (gst_element_get_state(gst_pipeline_, NULL, NULL, -1) == GST_STATE_CHANGE_FAILURE)
   {
-    RCLCPP_FATAL(get_logger(), "[%s]: Failed to PAUSE stream, check your gstreamer configuration.",
-                 camera_name_.c_str());
+    RCLCPP_FATAL(get_logger(), "[%s]: Failed to PAUSE stream, check your gstreamer configuration.", camera_name_.c_str());
     return false;
   }
   else
@@ -347,16 +395,14 @@ bool VisionComponent::loadCameraInfo()
   get_parameter<std::string>(CAMERA_INFO_URL_USER_PARAM, camera_info_);
   if (camera_info_.empty())
   {
-    RCLCPP_INFO(get_logger(),
-                "[%s]: Custom camera information file not set, using default one based on sensor resolution",
+    RCLCPP_INFO(get_logger(), "[%s]: Custom camera information file not set, using default one based on sensor resolution",
                 camera_name_.c_str());
 
     declare_parameter<std::string>(CAMERA_INFO_URL_DEFAULT_PARAM);
     get_parameter<std::string>(CAMERA_INFO_URL_DEFAULT_PARAM, cam_info_default);
     if (!cam_info_default.empty())
     {
-      snprintf(cam_info_default_resolved, CAM_INFO_DEFAULT_URL_MAX_SIZE, cam_info_default.c_str(), image_width_,
-               image_height_);
+      snprintf(cam_info_default_resolved, CAM_INFO_DEFAULT_URL_MAX_SIZE, cam_info_default.c_str(), image_width_, image_height_);
       camera_info_.assign(cam_info_default_resolved);
     }
     else
@@ -374,8 +420,8 @@ bool VisionComponent::loadCameraInfo()
     }
     else
     {
-      RCLCPP_WARN(get_logger(), "[%s]: Camera info at '%s' not found. Using an uncalibrated config.",
-                  camera_name_.c_str(), camera_info_.c_str());
+      RCLCPP_WARN(get_logger(), "[%s]: Camera info at '%s' not found. Using an uncalibrated config.", camera_name_.c_str(),
+                  camera_info_.c_str());
     }
   }
   else
@@ -425,8 +471,7 @@ bool VisionComponent::publish()
   if (cur_cinfo.height != static_cast<uint32_t>(image_height_) || cur_cinfo.width != static_cast<uint32_t>(image_width_))
   {
     RCLCPP_WARN_ONCE(get_logger(),
-                     "[%s]: Calibration file sensor resolution (%dx%d pixels) doesn't match stream resolution (%dx%d "
-                     "pixels)",
+                     "[%s]: Calibration file sensor resolution (%dx%d pixels) doesn't match stream resolution (%dx%d pixels)",
                      camera_name_.c_str(), cur_cinfo.height, cur_cinfo.width, image_height_, image_width_);
   }
 
@@ -451,16 +496,14 @@ bool VisionComponent::publish()
   if (buf_size < expected_frame_size)
   {
     RCLCPP_WARN_ONCE(get_logger(),
-                     "[%s]: Image buffer underflow: expected frame to be %u bytes but got only %lu bytes. Make sure "
-                     "frames are correctly encoded.",
+                     "[%s]: Image buffer underflow: expected frame to be %u bytes but got only %lu bytes. Make sure frames are correctly encoded.",
                      camera_name_.c_str(), expected_frame_size, buf_size);
   }
 
   if (buf_size > expected_frame_size)
   {
     RCLCPP_WARN_ONCE(get_logger(),
-                     "[%s]: Image buffer overflow: expected frame to be %u bytes but got %lu bytes. Make sure "
-                     "frames are correctly encoded.",
+                     "[%s]: Image buffer overflow: expected frame to be %u bytes but got %lu bytes. Make sure frames are correctly encoded.",
                      camera_name_.c_str(), expected_frame_size, buf_size);
 
     gst_buffer_unmap(buf, &map);
@@ -486,11 +529,15 @@ bool VisionComponent::publish()
   // The gstreamer buffer still needs to be copied before it can be released.
   std::copy(buf_data, (buf_data) + (buf_size), img->data.begin());
 
+  ++published_frame_count_;
+
   if (debug_)
   {
-    RCLCPP_INFO(get_logger(), "[%s]: Publishing image pointer=%p data=%p camera_info pointer=%p",
-                camera_name_.c_str(), static_cast<void*>(img.get()), static_cast<void*>(img->data.data()),
-                static_cast<void*>(cinfo.get()));
+    RCLCPP_INFO(get_logger(),
+                "[%s]: Publishing frame=%llu stamp=%.9f image pointer=%p data=%p camera_info pointer=%p subscribers=%zu intra=%zu",
+                camera_name_.c_str(), static_cast<unsigned long long>(published_frame_count_), cinfo->header.stamp.seconds(), static_cast<void*>(img.get()),
+                static_cast<void*>(img->data.data()), static_cast<void*>(cinfo.get()), image_publisher_->get_subscription_count(),
+                image_publisher_->get_intra_process_subscription_count());
   }
 
   // publish the image/info
@@ -548,8 +595,7 @@ bool VisionComponent::changePipelineState(GstState state)
     }
 
     default:
-      RCLCPP_ERROR(get_logger(),
-                   "[%s]: Unknown state change return value when trying to change pipeline state to %s",
+      RCLCPP_ERROR(get_logger(), "[%s]: Unknown state change return value when trying to change pipeline state to %s",
                    camera_name_.c_str(), gst_element_state_get_name(state));
       return false;
   }
