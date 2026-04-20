@@ -534,10 +534,10 @@ bool VisionComponent::publish()
   if (debug_)
   {
     RCLCPP_INFO(get_logger(),
-                "[%s]: Publishing frame=%llu stamp=%.9f image pointer=%p data=%p camera_info pointer=%p subscribers=%zu intra=%zu",
-                camera_name_.c_str(), static_cast<unsigned long long>(published_frame_count_), cinfo->header.stamp.seconds(), static_cast<void*>(img.get()),
-                static_cast<void*>(img->data.data()), static_cast<void*>(cinfo.get()), image_publisher_->get_subscription_count(),
-                image_publisher_->get_intra_process_subscription_count());
+                "[%s]: Publishing frame=%llu stamp=%d.%09u image pointer=%p data=%p camera_info pointer=%p subscribers=%zu intra=%zu",
+                camera_name_.c_str(), static_cast<unsigned long long>(published_frame_count_), cinfo->header.stamp.sec, cinfo->header.stamp.nanosec,
+                static_cast<void*>(img.get()), static_cast<void*>(img->data.data()), static_cast<void*>(cinfo.get()),
+                image_publisher_->get_subscription_count(), image_publisher_->get_intra_process_subscription_count());
   }
 
   // publish the image/info

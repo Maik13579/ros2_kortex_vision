@@ -88,9 +88,9 @@ void VisionMonitorComponent::imageCallback(const sensor_msgs::msg::Image::ConstS
 
   if (debug_)
   {
-    RCLCPP_INFO(get_logger(), "Monitor received frame=%llu stamp=%.9f pointer=%p data=%p latency=%.3f ms", static_cast<unsigned long long>(received_frame_count_),
-                msg->header.stamp.seconds(), static_cast<const void*>(msg.get()), static_cast<const void*>(msg->data.data()),
-                latency_ms);
+    RCLCPP_INFO(get_logger(), "Monitor received frame=%llu stamp=%d.%09u pointer=%p data=%p latency=%.3f ms",
+                static_cast<unsigned long long>(received_frame_count_), msg->header.stamp.sec, msg->header.stamp.nanosec,
+                static_cast<const void*>(msg.get()), static_cast<const void*>(msg->data.data()), latency_ms);
   }
 }
 
